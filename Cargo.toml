@@ -1,0 +1,12 @@
+[package]
+name = "vulkano_sample"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# vulkano = "0.32.3"
+vulkano = "0.34.0"
+vulkano-shaders = "0.34.0"
+
+[profile.dev]
+opt-level = 1
