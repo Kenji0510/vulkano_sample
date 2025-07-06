@@ -80,7 +80,7 @@ fn display_info(device: &PhysicalDevice) {
 }
 
 fn main() {
-    let pcd_file_path = "/Users/kenji/Downloads/combined_120.pcd";
+    let pcd_file_path = "/home/kenji/workspace/Rust/vulkano_sample/data/combined_120.pcd";
     let pcd_data = match load_pcd(pcd_file_path) {
         Ok(points) => {
             println!("Loaded {}", pcd_file_path);
@@ -104,16 +104,13 @@ fn main() {
 
     let library = VulkanLibrary::new().expect("Failed to load vulkan library");
     let requireed_extensions = InstanceExtensions::empty();
-    let instance = Instance::new(
-        library,
-        InstanceCreateInfo {
-            enabled_extensions: requireed_extensions,
-            // enumerate_portability: true,
-            flags: InstanceCreateFlags::ENUMERATE_PORTABILITY,
-            max_api_version: Some(Version::V1_2),
-            ..Default::default()
-        },
-    )
+    let instance = Instance::new(library, InstanceCreateInfo {
+        enabled_extensions: requireed_extensions,
+        // enumerate_portability: true,
+        flags: InstanceCreateFlags::ENUMERATE_PORTABILITY,
+        max_api_version: Some(Version::V1_2),
+        ..Default::default()
+    })
     .expect("Faied to create instance");
 
     for device_extension in instance.enumerate_physical_devices().unwrap() {
@@ -137,20 +134,17 @@ fn main() {
         })
         .expect("Could not find a compute queue family!") as u32;
 
-    let (device, mut queues) = Device::new(
-        physical_device,
-        DeviceCreateInfo {
-            queue_create_infos: vec![QueueCreateInfo {
-                queue_family_index,
-                ..Default::default()
-            }],
-            enabled_extensions: DeviceExtensions {
-                khr_storage_buffer_storage_class: true,
-                ..DeviceExtensions::empty()
-            },
+    let (device, mut queues) = Device::new(physical_device, DeviceCreateInfo {
+        queue_create_infos: vec![QueueCreateInfo {
+            queue_family_index,
             ..Default::default()
+        }],
+        enabled_extensions: DeviceExtensions {
+            khr_storage_buffer_storage_class: true,
+            ..DeviceExtensions::empty()
         },
-    )
+        ..Default::default()
+    })
     .expect("Failed to create device!");
 
     let queue = queues.next().unwrap();
