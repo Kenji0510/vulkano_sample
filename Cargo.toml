@@ -4,9 +4,21 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-# vulkano = "0.32.3"
 vulkano = "0.34.0"
-vulkano-shaders = "0.34.0"
+vulkano-shaders = { version = "0.34.0", features = [
+    "shaderc-build-from-source",
+] }
+
+pollster = "0.3.0"
+bytemuck = "1.22.0"
+
+# For loading pcd files
+pcd-rs = { version = "0.12.0", features = ["derive"] }
+rayon = "1.10.0"
+anyhow = "1.0.97"
 
 [profile.dev]
 opt-level = 1
+
+[build-dependencies]
+shaderc = "0.8"

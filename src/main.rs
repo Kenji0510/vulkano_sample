@@ -2,9 +2,9 @@ use std::{sync::Arc, time::Instant};
 
 use vulkano::{
     Version, VulkanLibrary,
-    buffer::{Buffer, BufferCreateInfo, BufferUsage},
+    buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage},
     command_buffer::{
-        AutoCommandBufferBuilder, CommandBufferUsage,
+        AutoCommandBufferBuilder, CommandBufferUsage, CopyBufferInfo,
         allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo},
     },
     descriptor_set::{
@@ -18,19 +18,29 @@ use vulkano::{
     memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator},
     pipeline::{
         ComputePipeline, Pipeline, PipelineBindPoint, PipelineLayout,
-        PipelineShaderStageCreateInfo,
-        compute::ComputePipelineCreateInfo,
-        layout::{PipelineDescriptorSetLayoutCreateInfo, PipelineLayoutCreateInfo},
+        PipelineShaderStageCreateInfo, compute::ComputePipelineCreateInfo,
+        layout::PipelineDescriptorSetLayoutCreateInfo,
     },
-    shader::ShaderModule,
     sync::{self, GpuFuture},
 };
+
+use vulkano_sample::load_pcd::{Point, load_pcd};
+
+#[repr(C)]
+#[derive(BufferContents)]
+struct Uniform {
+    min_coodination: [f32; 3],
+    inv_vox: f32,
+    scale: f32,
+    inv_scale: f32,
+    hash_mask: u32,
+}
 
 fn display_info(device: &PhysicalDevice) {
     println!("=== Physical Devices ===");
     println!("Name: {}", device.properties().device_name);
     println!("Type:            {:?}", device.properties().device_type);
-    println!("API Version:     {}", device.api_version(),);
+    println!("API Version:     {}", device.api_version());
     println!("Driver Version:  {}", device.properties().driver_version);
     println!("UUID:            {:x?}", device.properties().device_uuid);
 
@@ -70,6 +80,28 @@ fn display_info(device: &PhysicalDevice) {
 }
 
 fn main() {
+    let pcd_file_path = "/Users/kenji/Downloads/combined_120.pcd";
+    let pcd_data = match load_pcd(pcd_file_path) {
+        Ok(points) => {
+            println!("Loaded {}", pcd_file_path);
+            points
+        }
+        Err(e) => {
+            eprintln!("Error loading PCD file: {}", e);
+            return;
+        }
+    };
+
+    println!("PCD data length: {}", pcd_data.len());
+
+    let uniform = Uniform {
+        min_coodination: [0.0, 0.0, 0.0],
+        inv_vox: 0.0,
+        scale: 2.0,
+        inv_scale: 0.0,
+        hash_mask: 0,
+    };
+
     let library = VulkanLibrary::new().expect("Failed to load vulkan library");
     let requireed_extensions = InstanceExtensions::empty();
     let instance = Instance::new(
@@ -125,9 +157,9 @@ fn main() {
 
     let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
 
-    let data_iter = 0..6553600u32;
-    let data_len = data_iter.len();
-    let data_buffer = Buffer::from_iter(
+    // let data_iter = 0..6553600u32;
+    let data_len = pcd_data.len();
+    let input_data_buffer = Buffer::from_iter(
         memory_allocator.clone(),
         BufferCreateInfo {
             usage: BufferUsage::STORAGE_BUFFER,
@@ -138,30 +170,81 @@ fn main() {
                 | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
             ..Default::default()
         },
-        data_iter,
+        pcd_data.clone(),
     )
     .expect("Failed to create buffer!");
+
+    let uniform_buffer = Buffer::from_data(
+        memory_allocator.clone(),
+        BufferCreateInfo {
+            usage: BufferUsage::UNIFORM_BUFFER,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+            ..Default::default()
+        },
+        uniform,
+    )
+    .expect("Failed to create uniform buffer!");
+
+    let output_data_buffer = Buffer::new_slice::<Point>(
+        memory_allocator.clone(),
+        BufferCreateInfo {
+            usage: BufferUsage::STORAGE_BUFFER | BufferUsage::TRANSFER_SRC,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+            ..Default::default()
+        },
+        data_len as u64,
+    )
+    .expect("Failed to create output buffer!");
+
+    let readback_buf = Buffer::new_slice::<Point>(
+        memory_allocator.clone(),
+        BufferCreateInfo {
+            usage: BufferUsage::TRANSFER_DST,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+            ..Default::default()
+        },
+        data_len as u64,
+    )
+    .expect("Failed to create readback buffer!");
+    // mod cs {
+    //     vulkano_shaders::shader! {
+    //         ty: "compute",
+    //         src: "
+    //             #version 460
+
+    //             layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+    //             layout(set = 0, binding = 0) buffer Data {
+    //                 uint data[];
+    //             } buf;
+
+    //             void main() {
+    //                 uint idx = gl_GlobalInvocationID.x;
+    //                 buf.data[idx] *= 12;
+    //             }
+    //         "
+    //     }
+    // }
 
     mod cs {
         vulkano_shaders::shader! {
             ty: "compute",
-            src: "
-                #version 460
-
-                layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
-
-                layout(set = 0, binding = 0) buffer Data {
-                    uint data[];
-                } buf;
-
-                void main() {
-                    uint idx = gl_GlobalInvocationID.x;
-                    buf.data[idx] *= 12;
-                }
-            "
+            path: "src/shaders/compute_shader.comp"
         }
     }
 
+    // let shader = cs::load(device.clone()).expect("Failed to create shader!");
     let shader = cs::load(device.clone()).expect("Failed to create shader!");
 
     let cs = shader.entry_point("main").unwrap();
@@ -194,7 +277,11 @@ fn main() {
     let descriptor_set = PersistentDescriptorSet::new(
         &descriptor_set_allocator,
         descriptor_set_layout.clone(),
-        [WriteDescriptorSet::buffer(0, data_buffer.clone())],
+        [
+            WriteDescriptorSet::buffer(0, input_data_buffer.clone()),
+            WriteDescriptorSet::buffer(1, uniform_buffer.clone()),
+            WriteDescriptorSet::buffer(2, output_data_buffer.clone()),
+        ],
         [],
     )
     .unwrap();
@@ -227,6 +314,11 @@ fn main() {
         )
         .unwrap()
         .dispatch(work_group_counts)
+        .unwrap()
+        .copy_buffer(CopyBufferInfo::buffers(
+            output_data_buffer.clone(),
+            readback_buf.clone(),
+        ))
         .unwrap();
 
     let command_buffer = command_buffer_builder.build().unwrap();
@@ -242,11 +334,12 @@ fn main() {
     let compute_end_time = compute_start_time.elapsed();
     println!("GPU computation time: {:?}", compute_end_time);
 
-    // let content = data_buffer.read().unwrap();
-    // for (n, val) in content.iter().enumerate() {
-    //     // assert_eq!(*val, n as u32 * 12);
-    //     println!("{}, {}", n, *val);
-    // }
+    let content = readback_buf.read().unwrap();
+    // // for (n, val) in content.iter().enumerate() {
+    // //     // assert_eq!(*val, n as u32 * 12);
+    // //     println!("{}, {:?}", n, *val);
+    // // }
+    println!("{:?}", content[0]);
 
     println!("Succeeded!");
 }
