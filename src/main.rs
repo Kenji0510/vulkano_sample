@@ -158,19 +158,33 @@ fn main() {
     let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
 
     // let data_iter = 0..6553600u32;
-    let data_len = pcd_data.len();
-    let input_data_buffer = Buffer::from_iter(
+    let staging_buffer = Buffer::from_iter(
         memory_allocator.clone(),
         BufferCreateInfo {
-            usage: BufferUsage::STORAGE_BUFFER,
+            usage: BufferUsage::TRANSFER_SRC,
             ..Default::default()
         },
         AllocationCreateInfo {
-            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+            memory_type_filter: MemoryTypeFilter::PREFER_HOST
                 | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
             ..Default::default()
         },
         pcd_data.clone(),
+    )
+    .expect("Failed to create staging buffer!");
+
+    let data_len = pcd_data.len();
+    let input_data_buffer = Buffer::new_slice::<Point>(
+        memory_allocator.clone(),
+        BufferCreateInfo {
+            usage: BufferUsage::STORAGE_BUFFER | BufferUsage::TRANSFER_DST,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+            ..Default::default()
+        },
+        data_len as u64,
     )
     .expect("Failed to create buffer!");
 
@@ -304,6 +318,11 @@ fn main() {
     let work_group_counts = [group_count_x, 1, 1];
 
     command_buffer_builder
+        .copy_buffer(CopyBufferInfo::buffers(
+            staging_buffer.clone(),
+            input_data_buffer.clone(),
+        ))
+        .unwrap()
         .bind_pipeline_compute(compute_pipeline.clone())
         .unwrap()
         .bind_descriptor_sets(

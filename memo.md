@@ -15,7 +15,7 @@ Max storage_buffer:    4294967295
 Max uniform_buffer:    4294967295
 Timestamp period (ns): 1
 -----------------------------
-GPU computation time: 20.304916ms
+GPU computation time: 20.160208ms
 Point { x: 1.0183309, y: 14.78983, z: -0.61756647 }
 Succeeded!
 ```
