@@ -109,12 +109,10 @@ fn main() {
 
     let (min_x, min_y, min_z) = get_min_value(&pcd_data);
 
-    let voxel_size = 0.1;
+    let voxel_size = 0.01;
     let scale = 1000.0;
     let capasity = (pcd_data.len() * 3 * 2).next_power_of_two();
     let buf_bytes = capasity * 4;
-    let zero_key = vec![0u32; capasity];
-    let zero_i32 = vec![0i32; capasity];
 
     let uniform = Uniform {
         min_coodination: [min_x, min_y, min_z],
@@ -130,7 +128,6 @@ fn main() {
     println!("Inv scale: {}", &uniform.inv_scale);
     println!("Capacity: {}", &capasity);
     println!("Buffer bytes: {}", &buf_bytes);
-    // println!("Zero key: {:?}", zero_key);
     println!("Hash mask: {}", &uniform.hash_mask);
     println!("------------------\n");
 
@@ -214,70 +211,66 @@ fn main() {
     )
     .expect("Failed to create buffer!");
 
-    let table_key_buffer = Buffer::from_iter(
+    let table_key_buffer = Buffer::new_slice::<u32>(
         memory_allocator.clone(),
         BufferCreateInfo {
-            usage: BufferUsage::STORAGE_BUFFER,
+            usage: BufferUsage::STORAGE_BUFFER | BufferUsage::TRANSFER_DST,
             ..Default::default()
         },
         AllocationCreateInfo {
-            memory_type_filter: MemoryTypeFilter::PREFER_HOST
-                | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
             ..Default::default()
         },
-        zero_key,
+        capasity as u64,
     )
     .expect("Failed to create table key buffer!");
 
-    let sum_x_buffer = Buffer::from_iter(
+    let sum_x_buffer = Buffer::new_slice::<u32>(
         memory_allocator.clone(),
         BufferCreateInfo {
-            usage: BufferUsage::STORAGE_BUFFER,
+            usage: BufferUsage::STORAGE_BUFFER | BufferUsage::TRANSFER_DST,
             ..Default::default()
         },
         AllocationCreateInfo {
-            memory_type_filter: MemoryTypeFilter::PREFER_HOST
-                | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
             ..Default::default()
         },
-        zero_i32.clone(),
+        capasity as u64,
     )
     .expect("Failed to create sum x buffer!");
 
-    let sum_y_buffer = Buffer::from_iter(
+    let sum_y_buffer = Buffer::new_slice::<u32>(
         memory_allocator.clone(),
         BufferCreateInfo {
-            usage: BufferUsage::STORAGE_BUFFER,
+            usage: BufferUsage::STORAGE_BUFFER | BufferUsage::TRANSFER_DST,
             ..Default::default()
         },
         AllocationCreateInfo {
-            memory_type_filter: MemoryTypeFilter::PREFER_HOST
-                | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
             ..Default::default()
         },
-        zero_i32.clone(),
+        capasity as u64,
     )
     .expect("Failed to create sum y buffer!");
 
-    let sum_z_buffer = Buffer::from_iter(
+    let sum_z_buffer = Buffer::new_slice::<u32>(
         memory_allocator.clone(),
         BufferCreateInfo {
-            usage: BufferUsage::STORAGE_BUFFER,
+            usage: BufferUsage::STORAGE_BUFFER | BufferUsage::TRANSFER_DST,
             ..Default::default()
         },
         AllocationCreateInfo {
-            memory_type_filter: MemoryTypeFilter::PREFER_HOST
-                | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
             ..Default::default()
         },
-        zero_i32.clone(),
+        capasity as u64,
     )
     .expect("Failed to create sum z buffer!");
 
     let table_cnt_buffer = Buffer::new_slice::<u32>(
         memory_allocator.clone(),
         BufferCreateInfo {
-            usage: BufferUsage::STORAGE_BUFFER,
+            usage: BufferUsage::STORAGE_BUFFER | BufferUsage::TRANSFER_DST,
             ..Default::default()
         },
         AllocationCreateInfo {
@@ -459,24 +452,24 @@ fn main() {
     )
     .unwrap();
 
-    let descriptor_set_02 = PersistentDescriptorSet::new(
-        &descriptor_set_allocator,
-        descriptor_set_layout.clone(),
-        [
-            WriteDescriptorSet::buffer(0, input_data_buffer.clone()),
-            WriteDescriptorSet::buffer(1, table_key_buffer.clone()),
-            WriteDescriptorSet::buffer(2, sum_x_buffer.clone()),
-            WriteDescriptorSet::buffer(3, sum_y_buffer.clone()),
-            WriteDescriptorSet::buffer(4, sum_z_buffer.clone()),
-            WriteDescriptorSet::buffer(5, table_cnt_buffer.clone()),
-            WriteDescriptorSet::buffer(6, fail_cnt_buffer.clone()),
-            WriteDescriptorSet::buffer(7, uniform_buffer.clone()),
-            WriteDescriptorSet::buffer(8, centroids_num_buffer.clone()),
-            WriteDescriptorSet::buffer(9, output_data_buffer.clone()),
-        ],
-        [],
-    )
-    .unwrap();
+    // let descriptor_set_02 = PersistentDescriptorSet::new(
+    //     &descriptor_set_allocator,
+    //     descriptor_set_layout.clone(),
+    //     [
+    //         WriteDescriptorSet::buffer(0, input_data_buffer.clone()),
+    //         WriteDescriptorSet::buffer(1, table_key_buffer.clone()),
+    //         WriteDescriptorSet::buffer(2, sum_x_buffer.clone()),
+    //         WriteDescriptorSet::buffer(3, sum_y_buffer.clone()),
+    //         WriteDescriptorSet::buffer(4, sum_z_buffer.clone()),
+    //         WriteDescriptorSet::buffer(5, table_cnt_buffer.clone()),
+    //         WriteDescriptorSet::buffer(6, fail_cnt_buffer.clone()),
+    //         WriteDescriptorSet::buffer(7, uniform_buffer.clone()),
+    //         WriteDescriptorSet::buffer(8, centroids_num_buffer.clone()),
+    //         WriteDescriptorSet::buffer(9, output_data_buffer.clone()),
+    //     ],
+    //     [],
+    // )
+    // .unwrap();
 
     let command_buffer_allocator = StandardCommandBufferAllocator::new(
         device.clone(),
@@ -501,13 +494,23 @@ fn main() {
             input_data_buffer.clone(),
         ))
         .unwrap()
+        .fill_buffer(table_key_buffer.clone(), 0u32)
+        .unwrap()
+        .fill_buffer(sum_x_buffer.clone(), 0u32)
+        .unwrap()
+        .fill_buffer(sum_y_buffer.clone(), 0u32)
+        .unwrap()
+        .fill_buffer(sum_z_buffer.clone(), 0u32)
+        .unwrap()
+        .fill_buffer(table_cnt_buffer.clone(), 0u32)
+        .unwrap()
         .bind_pipeline_compute(compute_pipeline_01.clone()) // The first compute pipeline
         .unwrap()
         .bind_descriptor_sets(
             PipelineBindPoint::Compute,
             compute_pipeline_01.layout().clone(),
             descriptor_set_layout_index as u32,
-            descriptor_set_01,
+            descriptor_set_01.clone(),
         )
         .unwrap()
         .dispatch(work_group_counts)
@@ -518,7 +521,7 @@ fn main() {
             PipelineBindPoint::Compute,
             compute_pipeline_02.layout().clone(),
             descriptor_set_layout_index as u32,
-            descriptor_set_02,
+            descriptor_set_01.clone(),
         )
         .unwrap()
         .dispatch([capasity as u32 / LOCAL_SIZE, 1, 1])
