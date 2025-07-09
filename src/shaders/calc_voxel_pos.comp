@@ -1,0 +1,124 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+struct Point {
+    float x;
+    float y;
+    float z;
+};
+
+layout(set = 0, binding = 0) buffer InputData {
+    Point points[];
+} pts;
+
+layout(set = 0, binding = 1) buffer TableKey {
+    uint table_key[];
+} tbl_keys;
+
+layout(set = 0, binding = 2) buffer SumX {
+    int sum_x[];
+} sumx;
+
+layout(set = 0, binding = 3) buffer SumY {
+    int sum_y[];
+} sumy;
+
+layout(set = 0, binding = 4) buffer SumZ {
+    int sum_z[];
+} sumz;
+
+layout(set = 0, binding = 5) buffer TableCnt {
+    uint table_cnt[];
+} tbl_cnt;
+
+layout(set = 0, binding = 6) buffer FailCnt {
+    uint fail_cnt;
+} fcnt;
+
+layout(set = 0, binding = 7) uniform Params {
+    vec3 min_coordinate;
+    float inv_vox;
+    float scale;
+    float inv_scale;
+    uint hash_mask;
+} uni;
+
+layout(set = 0, binding = 8) buffer CentroidsNum {
+    uint centroids_num;
+} cent_cnt;
+
+layout(set = 0, binding = 9) buffer OutputData {
+    Point points[];
+} out_pts;
+
+shared uint w_key[256];
+shared vec3 w_sum[256];
+shared uint w_cnt[256];
+
+uint part1by2(uint n) {
+    uint x = n & 0x000003FFu;
+
+    x = (x | (x << 16)) & 0xFF0000FFu;
+    x = (x | (x << 8)) & 0x0300F00Fu;
+    x = (x | (x << 4)) & 0x030C30C3u;
+    x = (x | (x << 2)) & 0x09249249u;
+
+    return x;
+}
+
+uint morton3d(uint ix, uint iy, uint iz) {
+    return part1by2(ix) | (part1by2(iy) << 1u) | (part1by2(iz) << 2u);
+}
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pts.points.length()) {
+        return;
+    }
+
+    vec3 p_vec = vec3(pts.points[idx].x, pts.points[idx].y, pts.points[idx].z);
+    vec3 v = (p_vec - uni.min_coordinate) * uni.inv_vox;
+    uint key = morton3d(uint(floor(v.x)), uint(floor(v.y)), uint(floor(v.z)));
+
+    uint lid = gl_LocalInvocationID.x;
+    w_key[lid] = key;
+    w_sum[lid] = p_vec;
+    w_cnt[lid] = 1u;
+    memoryBarrierShared(); barrier();
+
+    uint step = 128u;
+    while (true) {
+        if (lid < step && w_key[lid] == w_key[lid + step]) {
+            w_sum[lid] += w_sum[lid + step];
+            w_cnt[lid] += w_cnt[lid + step];
+            w_key[lid + step] = 0xFFFFFFFFu;
+        }
+        memoryBarrierShared(); barrier();
+        if (step == 1u) {
+            break;
+        }
+        step >>= 1u;
+    }
+
+    if (w_key[lid] != 0xFFFFFFFFu) {
+        uint slot = w_key[lid] & uni.hash_mask;
+        for (uint tries = 0u; tries < 64u; ++tries) {
+            uint old = atomicCompSwap(tbl_keys.table_key[slot], 0u, w_key[lid]);
+
+            if (old == 0u || old == w_key[lid]) {
+                int sx = int(round(w_sum[lid].x * uni.scale));
+                int sy = int(round(w_sum[lid].y * uni.scale));
+                int sz = int(round(w_sum[lid].z * uni.scale));
+
+                atomicAdd(sumx.sum_x[slot], sx);
+                atomicAdd(sumy.sum_y[slot], sy);
+                atomicAdd(sumz.sum_z[slot], sz);
+                atomicAdd(tbl_cnt.table_cnt[slot], w_cnt[lid]);
+                return;
+            }
+            slot = (slot + 1u) & uni.hash_mask;
+        }
+        atomicAdd(fcnt.fail_cnt, 1u);
+    }
+}

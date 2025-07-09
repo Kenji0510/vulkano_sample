@@ -1,0 +1,88 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+struct Point {
+    float x;
+    float y;
+    float z;
+};
+
+layout(set = 0, binding = 0) buffer InputData {
+    Point points[];
+} pts;
+
+layout(set = 0, binding = 1) buffer TableKey {
+    uint table_key[];
+} tbl_keys;
+
+layout(set = 0, binding = 2) buffer SumX {
+    int sum_x[];
+} sumx;
+
+layout(set = 0, binding = 3) buffer SumY {
+    int sum_y[];
+} sumy;
+
+layout(set = 0, binding = 4) buffer SumZ {
+    int sum_z[];
+} sumz;
+
+layout(set = 0, binding = 5) buffer TableCnt {
+    uint table_cnt[];
+} tbl_cnt;
+
+layout(set = 0, binding = 6) buffer FailCnt {
+    uint fail_cnt;
+} fcnt;
+
+layout(set = 0, binding = 7) uniform Params {
+    vec3 min_coordinate;
+    float inv_vox;
+    float scale;
+    float inv_scale;
+    uint hash_mask;
+} uni;
+
+layout(set = 0, binding = 8) buffer CentroidsNum {
+    uint centroids_num;
+} cent_cnt;
+
+layout(set = 0, binding = 9) buffer OutputData {
+    Point points[];
+} out_pts;
+
+shared uint w_key[256];
+shared vec3 w_sum[256];
+shared uint w_cnt[256];
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+
+    if (i >= uni.hash_mask) {
+        return;
+    }
+
+    uint k = atomicAdd(tbl_keys.table_key[i], 0u);
+    if (k == 0u) {
+        return;
+    }
+
+    uint dst = atomicAdd(cent_cnt.centroids_num, 1u);
+
+    float c = float(atomicAdd(tbl_cnt.table_cnt[i], 0u));
+    float sx = float(atomicAdd(sumx.sum_x[i], 0)) * uni.inv_scale;
+    float sy = float(atomicAdd(sumy.sum_y[i], 0)) * uni.inv_scale;
+    float sz = float(atomicAdd(sumz.sum_z[i], 0)) * uni.inv_scale;
+
+    out_pts.points[dst] = Point(sx / c, sy / c, sz / c);
+}
+
+// void main() {
+//     uint idx = gl_GlobalInvocationID.x;
+//     if (idx < input_points.length()) {
+//         output_points[idx].x = input_points[idx].x * scale;
+//         output_points[idx].y = input_points[idx].y * scale;
+//         output_points[idx].z = input_points[idx].z * scale;
+//     }
+// }

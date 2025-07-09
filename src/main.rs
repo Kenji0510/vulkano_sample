@@ -24,7 +24,7 @@ use vulkano::{
     sync::{self, GpuFuture},
 };
 
-use vulkano_sample::load_pcd::{Point, load_pcd};
+use vulkano_sample::load_pcd::{Point, load_pcd, save_pcd};
 
 #[repr(C)]
 #[derive(BufferContents)]
@@ -34,6 +34,16 @@ struct Uniform {
     scale: f32,
     inv_scale: f32,
     hash_mask: u32,
+}
+
+fn get_min_value(points: &[Point]) -> (f32, f32, f32) {
+    let (mut min_x, mut min_y, mut min_z) = (f32::INFINITY, f32::INFINITY, f32::INFINITY);
+    for p in points {
+        min_x = min_x.min(p.x);
+        min_y = min_y.min(p.y);
+        min_z = min_z.min(p.z);
+    }
+    (min_x, min_y, min_z)
 }
 
 fn display_info(device: &PhysicalDevice) {
@@ -92,15 +102,37 @@ fn main() {
         }
     };
 
+    println!("=== PCD Info ===");
     println!("PCD data length: {}", pcd_data.len());
+    println!("Points num: {}", pcd_data.len() * 3);
+    println!("------------------\n");
+
+    let (min_x, min_y, min_z) = get_min_value(&pcd_data);
+
+    let voxel_size = 0.1;
+    let scale = 1000.0;
+    let capasity = (pcd_data.len() * 3 * 2).next_power_of_two();
+    let buf_bytes = capasity * 4;
+    let zero_key = vec![0u32; capasity];
+    let zero_i32 = vec![0i32; capasity];
 
     let uniform = Uniform {
-        min_coodination: [0.0, 0.0, 0.0],
-        inv_vox: 0.0,
-        scale: 2.0,
-        inv_scale: 0.0,
-        hash_mask: 0,
+        min_coodination: [min_x, min_y, min_z],
+        inv_vox: 1.0 / voxel_size,
+        scale: scale,
+        inv_scale: 1.0 / scale,
+        hash_mask: (capasity - 1) as u32,
     };
+
+    println!("=== Parameters ===");
+    println!("Voxel size: {}", &voxel_size);
+    println!("Scale: {}", &uniform.scale);
+    println!("Inv scale: {}", &uniform.inv_scale);
+    println!("Capacity: {}", &capasity);
+    println!("Buffer bytes: {}", &buf_bytes);
+    // println!("Zero key: {:?}", zero_key);
+    println!("Hash mask: {}", &uniform.hash_mask);
+    println!("------------------\n");
 
     let library = VulkanLibrary::new().expect("Failed to load vulkan library");
     let requireed_extensions = InstanceExtensions::empty();
@@ -182,6 +214,93 @@ fn main() {
     )
     .expect("Failed to create buffer!");
 
+    let table_key_buffer = Buffer::from_iter(
+        memory_allocator.clone(),
+        BufferCreateInfo {
+            usage: BufferUsage::STORAGE_BUFFER,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+            ..Default::default()
+        },
+        zero_key,
+    )
+    .expect("Failed to create table key buffer!");
+
+    let sum_x_buffer = Buffer::from_iter(
+        memory_allocator.clone(),
+        BufferCreateInfo {
+            usage: BufferUsage::STORAGE_BUFFER,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+            ..Default::default()
+        },
+        zero_i32.clone(),
+    )
+    .expect("Failed to create sum x buffer!");
+
+    let sum_y_buffer = Buffer::from_iter(
+        memory_allocator.clone(),
+        BufferCreateInfo {
+            usage: BufferUsage::STORAGE_BUFFER,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+            ..Default::default()
+        },
+        zero_i32.clone(),
+    )
+    .expect("Failed to create sum y buffer!");
+
+    let sum_z_buffer = Buffer::from_iter(
+        memory_allocator.clone(),
+        BufferCreateInfo {
+            usage: BufferUsage::STORAGE_BUFFER,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+            ..Default::default()
+        },
+        zero_i32.clone(),
+    )
+    .expect("Failed to create sum z buffer!");
+
+    let table_cnt_buffer = Buffer::new_slice::<u32>(
+        memory_allocator.clone(),
+        BufferCreateInfo {
+            usage: BufferUsage::STORAGE_BUFFER,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+            ..Default::default()
+        },
+        buf_bytes as u64,
+    )
+    .expect("Failed to create table cnt buffer!");
+
+    let fail_cnt_buffer = Buffer::new_sized::<u32>(
+        memory_allocator.clone(),
+        BufferCreateInfo {
+            usage: BufferUsage::STORAGE_BUFFER | BufferUsage::TRANSFER_SRC,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+            ..Default::default()
+        },
+    )
+    .expect("Failed to create fail cnt buffer!");
+
     let uniform_buffer = Buffer::from_data(
         memory_allocator.clone(),
         BufferCreateInfo {
@@ -196,6 +315,19 @@ fn main() {
         uniform,
     )
     .expect("Failed to create uniform buffer!");
+
+    let centroids_num_buffer = Buffer::new_sized::<u32>(
+        memory_allocator.clone(),
+        BufferCreateInfo {
+            usage: BufferUsage::STORAGE_BUFFER | BufferUsage::TRANSFER_SRC,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+            ..Default::default()
+        },
+    )
+    .expect("Failed to create centroids num buffer!");
 
     let output_data_buffer = Buffer::new_slice::<Point>(
         memory_allocator.clone(),
@@ -225,70 +357,122 @@ fn main() {
         data_len as u64,
     )
     .expect("Failed to create readback buffer!");
-    // mod cs {
-    //     vulkano_shaders::shader! {
-    //         ty: "compute",
-    //         src: "
-    //             #version 460
 
-    //             layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+    let staging_fail_cnt = Buffer::new_sized::<u32>(
+        memory_allocator.clone(),
+        BufferCreateInfo {
+            usage: BufferUsage::TRANSFER_DST,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+            ..Default::default()
+        },
+    )
+    .expect("Failed to create staging fail cnt buffer!");
 
-    //             layout(set = 0, binding = 0) buffer Data {
-    //                 uint data[];
-    //             } buf;
+    let staging_centroids_num = Buffer::new_sized::<u32>(
+        memory_allocator.clone(),
+        BufferCreateInfo {
+            usage: BufferUsage::TRANSFER_DST,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_HOST
+                | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+            ..Default::default()
+        },
+    )
+    .expect("Failed to create staging centroids num buffer!");
 
-    //             void main() {
-    //                 uint idx = gl_GlobalInvocationID.x;
-    //                 buf.data[idx] *= 12;
-    //             }
-    //         "
-    //     }
-    // }
-
-    mod cs {
+    mod cs_01 {
         vulkano_shaders::shader! {
             ty: "compute",
-            path: "src/shaders/compute_shader.comp"
+            path: "src/shaders/calc_voxel_pos.comp"
+        }
+    }
+
+    mod cs_02 {
+        vulkano_shaders::shader! {
+            ty: "compute",
+            path: "src/shaders/calc_centroids.comp"
         }
     }
 
     // let shader = cs::load(device.clone()).expect("Failed to create shader!");
-    let shader = cs::load(device.clone()).expect("Failed to create shader!");
+    let shader_01 = cs_01::load(device.clone()).expect("Failed to create shader!");
+    let shader_02 = cs_02::load(device.clone()).expect("Failed to create shader!");
 
-    let cs = shader.entry_point("main").unwrap();
-    let stage = PipelineShaderStageCreateInfo::new(cs);
+    let cs_01 = shader_01.entry_point("main").unwrap();
+    let cs_02 = shader_02.entry_point("main").unwrap();
+    let stage = PipelineShaderStageCreateInfo::new(cs_01);
+    let stage_centroid = PipelineShaderStageCreateInfo::new(cs_02);
     let layout = PipelineLayout::new(
         device.clone(),
-        PipelineDescriptorSetLayoutCreateInfo::from_stages([&stage])
+        PipelineDescriptorSetLayoutCreateInfo::from_stages([&stage, &stage_centroid])
             .into_pipeline_layout_create_info(device.clone())
             .unwrap(),
     )
     .unwrap();
 
-    let compute_pipeline = ComputePipeline::new(
+    let compute_pipeline_01 = ComputePipeline::new(
         device.clone(),
         None,
-        ComputePipelineCreateInfo::stage_layout(stage, layout),
+        ComputePipelineCreateInfo::stage_layout(stage, layout.clone()),
+    )
+    .expect("Failed to create compute pipeline!");
+
+    let compute_pipeline_02 = ComputePipeline::new(
+        device.clone(),
+        None,
+        ComputePipelineCreateInfo::stage_layout(stage_centroid, layout.clone()),
     )
     .expect("Failed to create compute pipeline!");
 
     let descriptor_set_allocator =
         StandardDescriptorSetAllocator::new(device.clone(), Default::default());
 
-    let pipeline_layout = compute_pipeline.layout();
-    let descriptor_set_layouts = pipeline_layout.set_layouts();
+    let pipeline_layout_01 = compute_pipeline_01.layout();
+    let descriptor_set_layouts_01 = pipeline_layout_01.set_layouts();
     let descriptor_set_layout_index = 0;
-    let descriptor_set_layout = descriptor_set_layouts
+    let descriptor_set_layout = descriptor_set_layouts_01
         .get(descriptor_set_layout_index)
         .unwrap();
 
-    let descriptor_set = PersistentDescriptorSet::new(
+    let descriptor_set_01 = PersistentDescriptorSet::new(
         &descriptor_set_allocator,
         descriptor_set_layout.clone(),
         [
             WriteDescriptorSet::buffer(0, input_data_buffer.clone()),
-            WriteDescriptorSet::buffer(1, uniform_buffer.clone()),
-            WriteDescriptorSet::buffer(2, output_data_buffer.clone()),
+            WriteDescriptorSet::buffer(1, table_key_buffer.clone()),
+            WriteDescriptorSet::buffer(2, sum_x_buffer.clone()),
+            WriteDescriptorSet::buffer(3, sum_y_buffer.clone()),
+            WriteDescriptorSet::buffer(4, sum_z_buffer.clone()),
+            WriteDescriptorSet::buffer(5, table_cnt_buffer.clone()),
+            WriteDescriptorSet::buffer(6, fail_cnt_buffer.clone()),
+            WriteDescriptorSet::buffer(7, uniform_buffer.clone()),
+            WriteDescriptorSet::buffer(8, centroids_num_buffer.clone()),
+            WriteDescriptorSet::buffer(9, output_data_buffer.clone()),
+        ],
+        [],
+    )
+    .unwrap();
+
+    let descriptor_set_02 = PersistentDescriptorSet::new(
+        &descriptor_set_allocator,
+        descriptor_set_layout.clone(),
+        [
+            WriteDescriptorSet::buffer(0, input_data_buffer.clone()),
+            WriteDescriptorSet::buffer(1, table_key_buffer.clone()),
+            WriteDescriptorSet::buffer(2, sum_x_buffer.clone()),
+            WriteDescriptorSet::buffer(3, sum_y_buffer.clone()),
+            WriteDescriptorSet::buffer(4, sum_z_buffer.clone()),
+            WriteDescriptorSet::buffer(5, table_cnt_buffer.clone()),
+            WriteDescriptorSet::buffer(6, fail_cnt_buffer.clone()),
+            WriteDescriptorSet::buffer(7, uniform_buffer.clone()),
+            WriteDescriptorSet::buffer(8, centroids_num_buffer.clone()),
+            WriteDescriptorSet::buffer(9, output_data_buffer.clone()),
         ],
         [],
     )
@@ -317,20 +501,41 @@ fn main() {
             input_data_buffer.clone(),
         ))
         .unwrap()
-        .bind_pipeline_compute(compute_pipeline.clone())
+        .bind_pipeline_compute(compute_pipeline_01.clone()) // The first compute pipeline
         .unwrap()
         .bind_descriptor_sets(
             PipelineBindPoint::Compute,
-            compute_pipeline.layout().clone(),
+            compute_pipeline_01.layout().clone(),
             descriptor_set_layout_index as u32,
-            descriptor_set,
+            descriptor_set_01,
         )
         .unwrap()
         .dispatch(work_group_counts)
         .unwrap()
+        .bind_pipeline_compute(compute_pipeline_02.clone())
+        .unwrap()
+        .bind_descriptor_sets(
+            PipelineBindPoint::Compute,
+            compute_pipeline_02.layout().clone(),
+            descriptor_set_layout_index as u32,
+            descriptor_set_02,
+        )
+        .unwrap()
+        .dispatch([capasity as u32 / LOCAL_SIZE, 1, 1])
+        .unwrap()
         .copy_buffer(CopyBufferInfo::buffers(
             output_data_buffer.clone(),
             readback_buf.clone(),
+        ))
+        .unwrap()
+        .copy_buffer(CopyBufferInfo::buffers(
+            fail_cnt_buffer.clone(),
+            staging_fail_cnt.clone(),
+        ))
+        .unwrap()
+        .copy_buffer(CopyBufferInfo::buffers(
+            centroids_num_buffer.clone(),
+            staging_centroids_num.clone(),
         ))
         .unwrap();
 
@@ -345,14 +550,28 @@ fn main() {
 
     future.wait(None).unwrap();
     let compute_end_time = compute_start_time.elapsed();
-    println!("GPU computation time: {:?}", compute_end_time);
 
-    let content = readback_buf.read().unwrap();
-    // // for (n, val) in content.iter().enumerate() {
-    // //     // assert_eq!(*val, n as u32 * 12);
-    // //     println!("{}, {:?}", n, *val);
-    // // }
-    println!("{:?}", content[0]);
+    let fail_cnt = staging_fail_cnt.read().unwrap();
+
+    let centroids_num = staging_centroids_num.read().unwrap();
+
+    let voxelization_points = readback_buf.read().unwrap();
+    let voxelization_points_vec = voxelization_points[..*centroids_num as usize].to_vec();
+
+    println!("=== Run Result ===");
+    println!("GPU computation time: {:?}", compute_end_time);
+    println!("Fail cnt: {}", *fail_cnt);
+    println!("Centroids num: {}", *centroids_num);
+    println!("{:?}", voxelization_points[0]);
+    println!("------------------\n");
+
+    match save_pcd(
+        "/home/kenji/workspace/Rust/vulkano_sample/data/export-vulkano-voxelization.pcd",
+        voxelization_points_vec,
+    ) {
+        Ok(_) => println!("Saved voxelization points"),
+        Err(e) => eprintln!("Error saving voxelization points: {}", e),
+    };
 
     println!("Succeeded!");
 }
