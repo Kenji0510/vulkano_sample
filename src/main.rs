@@ -129,7 +129,7 @@ fn main() {
     println!("Capacity: {}", &capasity);
     println!("Buffer bytes: {}", &buf_bytes);
     println!("Hash mask: {}", &uniform.hash_mask);
-    println!("------------------\n");
+    println!("-------------------\n");
 
     let library = VulkanLibrary::new().expect("Failed to load vulkan library");
     let requireed_extensions = InstanceExtensions::empty();
