@@ -55,6 +55,7 @@ layout(set = 0, binding = 9) buffer OutputData {
 shared uint w_key[256];
 shared vec3 w_sum[256];
 shared uint w_cnt[256];
+shared uint rep_key[256];
 
 uint part1by2(uint n) {
     uint x = n & 0x000003FFu;
@@ -102,8 +103,25 @@ void main() {
     }
 
     if (w_key[lid] != 0xFFFFFFFFu) {
+        // uint bucket = w_key[lid] & 0xFFu;   
+        // if (lid == 0)                       
+        //     rep_key[bucket] = 0xFFFFFFFFu;
+        // memoryBarrierShared(); barrier();
+
+        // rep_key[lid] = 0xFFFFFFFFu;
+        // memoryBarrierShared(); barrier();
+
+        // uint packed = ((w_key[lid] & 0x3FFFFFu) << 10) | lid;
+
+        // atomicMin(rep_key[bucket], packed);
+        // barrier();
+
+        // if (rep_key[bucket] != packed) {
+        //     return;
+        // }
+
         uint slot = w_key[lid] & uni.hash_mask;
-        for (uint tries = 0u; tries < 64u; ++tries) {
+        for (uint tries = 0u; tries < 128u; ++tries) {
             uint old = atomicCompSwap(tbl_keys.table_key[slot], 0u, w_key[lid]);
 
             if (old == 0u || old == w_key[lid]) {

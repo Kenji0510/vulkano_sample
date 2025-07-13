@@ -8,7 +8,7 @@ use vulkano::{
         allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo},
     },
     descriptor_set::{
-        PersistentDescriptorSet, WriteDescriptorSet, allocator::StandardDescriptorSetAllocator,
+        DescriptorSet, WriteDescriptorSet, allocator::StandardDescriptorSetAllocator,
     },
     device::{
         Device, DeviceCreateInfo, DeviceExtensions, QueueCreateInfo, QueueFlags,
@@ -24,7 +24,9 @@ use vulkano::{
     sync::{self, GpuFuture},
 };
 
-use vulkano_sample::load_pcd::{Point, load_pcd, save_pcd};
+use vulkano_sample::load_pcd::{
+    PointForGBuffer, convert_to_point_for_gbuffer, load_pcd, load_pcd_xyz, save_pcd,
+};
 
 #[repr(C)]
 #[derive(BufferContents)]
@@ -36,7 +38,7 @@ struct Uniform {
     hash_mask: u32,
 }
 
-fn get_min_value(points: &[Point]) -> (f32, f32, f32) {
+fn get_min_value(points: &[PointForGBuffer]) -> (f32, f32, f32) {
     let (mut min_x, mut min_y, mut min_z) = (f32::INFINITY, f32::INFINITY, f32::INFINITY);
     for p in points {
         min_x = min_x.min(p.x);
@@ -90,8 +92,12 @@ fn display_info(device: &PhysicalDevice) {
 }
 
 fn main() {
-    let pcd_file_path = "/home/kenji/workspace/Rust/vulkano_sample/data/combined_120.pcd";
-    let pcd_data = match load_pcd(pcd_file_path) {
+    // let pcd_file_path = "/home/kenji/workspace/Rust/vulkano_sample/data/combined_120.pcd";
+    let pcd_file_path =
+        "/home/kenji/workspace/Rust/vulkano_sample/data/source/export-street-005.pcd";
+
+    // let pcd_data = match load_pcd(pcd_file_path) {
+    let pcd_data_for_gbuffer = match load_pcd_xyz(pcd_file_path) {
         Ok(points) => {
             println!("Loaded {}", pcd_file_path);
             points
@@ -102,16 +108,18 @@ fn main() {
         }
     };
 
+    // let pcd_data_for_gbuffer = convert_to_point_for_gbuffer(&pcd_data, pcd_data.len());
+
     println!("=== PCD Info ===");
-    println!("PCD data length: {}", pcd_data.len());
-    println!("Points num: {}", pcd_data.len() * 3);
+    println!("PCD data length: {}", pcd_data_for_gbuffer.len());
+    println!("xyz num: {}", pcd_data_for_gbuffer.len() * 3);
     println!("------------------\n");
 
-    let (min_x, min_y, min_z) = get_min_value(&pcd_data);
+    let (min_x, min_y, min_z) = get_min_value(&pcd_data_for_gbuffer);
 
-    let voxel_size = 0.01;
+    let voxel_size = 0.05;
     let scale = 1000.0;
-    let capasity = (pcd_data.len() * 3 * 2).next_power_of_two();
+    let capasity = (pcd_data_for_gbuffer.len() * 3 * 4).next_power_of_two();
     let buf_bytes = capasity * 4;
 
     let uniform = Uniform {
@@ -170,6 +178,7 @@ fn main() {
         }],
         enabled_extensions: DeviceExtensions {
             khr_storage_buffer_storage_class: true,
+            khr_shader_non_semantic_info: true,
             ..DeviceExtensions::empty()
         },
         ..Default::default()
@@ -192,12 +201,12 @@ fn main() {
                 | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
             ..Default::default()
         },
-        pcd_data.clone(),
+        pcd_data_for_gbuffer.clone(),
     )
     .expect("Failed to create staging buffer!");
 
-    let data_len = pcd_data.len();
-    let input_data_buffer = Buffer::new_slice::<Point>(
+    let data_len = pcd_data_for_gbuffer.len();
+    let input_data_buffer = Buffer::new_slice::<PointForGBuffer>(
         memory_allocator.clone(),
         BufferCreateInfo {
             usage: BufferUsage::STORAGE_BUFFER | BufferUsage::TRANSFER_DST,
@@ -322,7 +331,7 @@ fn main() {
     )
     .expect("Failed to create centroids num buffer!");
 
-    let output_data_buffer = Buffer::new_slice::<Point>(
+    let output_data_buffer = Buffer::new_slice::<PointForGBuffer>(
         memory_allocator.clone(),
         BufferCreateInfo {
             usage: BufferUsage::STORAGE_BUFFER | BufferUsage::TRANSFER_SRC,
@@ -336,7 +345,7 @@ fn main() {
     )
     .expect("Failed to create output buffer!");
 
-    let readback_buf = Buffer::new_slice::<Point>(
+    let readback_buf = Buffer::new_slice::<PointForGBuffer>(
         memory_allocator.clone(),
         BufferCreateInfo {
             usage: BufferUsage::TRANSFER_DST,
@@ -433,8 +442,8 @@ fn main() {
         .get(descriptor_set_layout_index)
         .unwrap();
 
-    let descriptor_set_01 = PersistentDescriptorSet::new(
-        &descriptor_set_allocator,
+    let descriptor_set_01 = DescriptorSet::new(
+        Arc::new(descriptor_set_allocator),
         descriptor_set_layout.clone(),
         [
             WriteDescriptorSet::buffer(0, input_data_buffer.clone()),
@@ -476,8 +485,23 @@ fn main() {
         StandardCommandBufferAllocatorCreateInfo::default(),
     );
 
+    // let transfer_to_compute = DependencyInfo {
+    //     memory_barriers: {
+    //         let mut barriers = SmallVec::new();
+    //         barriers.push(MemoryBarrier {
+    //             src_stages: PipelineStages::ALL_TRANSFER,
+    //             dst_stages: PipelineStages::COMPUTE_SHADER,
+    //             src_access: AccessFlags::TRANSFER_WRITE,
+    //             dst_access: AccessFlags::SHADER_READ | AccessFlags::SHADER_WRITE,
+    //             ..Default::default()
+    //         });
+    //         barriers
+    //     },
+    //     ..Default::default()
+    // };
+
     let mut command_buffer_builder = AutoCommandBufferBuilder::primary(
-        &command_buffer_allocator,
+        Arc::new(command_buffer_allocator),
         queue.queue_family_index(),
         CommandBufferUsage::OneTimeSubmit,
     )
@@ -488,59 +512,61 @@ fn main() {
 
     let work_group_counts = [group_count_x, 1, 1];
 
-    command_buffer_builder
-        .copy_buffer(CopyBufferInfo::buffers(
-            staging_buffer.clone(),
-            input_data_buffer.clone(),
-        ))
-        .unwrap()
-        .fill_buffer(table_key_buffer.clone(), 0u32)
-        .unwrap()
-        .fill_buffer(sum_x_buffer.clone(), 0u32)
-        .unwrap()
-        .fill_buffer(sum_y_buffer.clone(), 0u32)
-        .unwrap()
-        .fill_buffer(sum_z_buffer.clone(), 0u32)
-        .unwrap()
-        .fill_buffer(table_cnt_buffer.clone(), 0u32)
-        .unwrap()
-        .bind_pipeline_compute(compute_pipeline_01.clone()) // The first compute pipeline
-        .unwrap()
-        .bind_descriptor_sets(
-            PipelineBindPoint::Compute,
-            compute_pipeline_01.layout().clone(),
-            descriptor_set_layout_index as u32,
-            descriptor_set_01.clone(),
-        )
-        .unwrap()
-        .dispatch(work_group_counts)
-        .unwrap()
-        .bind_pipeline_compute(compute_pipeline_02.clone())
-        .unwrap()
-        .bind_descriptor_sets(
-            PipelineBindPoint::Compute,
-            compute_pipeline_02.layout().clone(),
-            descriptor_set_layout_index as u32,
-            descriptor_set_01.clone(),
-        )
-        .unwrap()
-        .dispatch([capasity as u32 / LOCAL_SIZE, 1, 1])
-        .unwrap()
-        .copy_buffer(CopyBufferInfo::buffers(
-            output_data_buffer.clone(),
-            readback_buf.clone(),
-        ))
-        .unwrap()
-        .copy_buffer(CopyBufferInfo::buffers(
-            fail_cnt_buffer.clone(),
-            staging_fail_cnt.clone(),
-        ))
-        .unwrap()
-        .copy_buffer(CopyBufferInfo::buffers(
-            centroids_num_buffer.clone(),
-            staging_centroids_num.clone(),
-        ))
-        .unwrap();
+    unsafe {
+        command_buffer_builder
+            .copy_buffer(CopyBufferInfo::buffers(
+                staging_buffer.clone(),
+                input_data_buffer.clone(),
+            ))
+            .unwrap()
+            .fill_buffer(table_key_buffer.clone(), 0u32)
+            .unwrap()
+            .fill_buffer(sum_x_buffer.clone(), 0u32)
+            .unwrap()
+            .fill_buffer(sum_y_buffer.clone(), 0u32)
+            .unwrap()
+            .fill_buffer(sum_z_buffer.clone(), 0u32)
+            .unwrap()
+            .fill_buffer(table_cnt_buffer.clone(), 0u32)
+            .unwrap()
+            .bind_pipeline_compute(compute_pipeline_01.clone()) // The first compute pipeline
+            .unwrap()
+            .bind_descriptor_sets(
+                PipelineBindPoint::Compute,
+                compute_pipeline_01.layout().clone(),
+                descriptor_set_layout_index as u32,
+                descriptor_set_01.clone(),
+            )
+            .unwrap()
+            .dispatch(work_group_counts)
+            .unwrap()
+            .bind_pipeline_compute(compute_pipeline_02.clone())
+            .unwrap()
+            .bind_descriptor_sets(
+                PipelineBindPoint::Compute,
+                compute_pipeline_02.layout().clone(),
+                descriptor_set_layout_index as u32,
+                descriptor_set_01.clone(),
+            )
+            .unwrap()
+            .dispatch([capasity as u32 / LOCAL_SIZE, 1, 1])
+            .unwrap()
+            .copy_buffer(CopyBufferInfo::buffers(
+                output_data_buffer.clone(),
+                readback_buf.clone(),
+            ))
+            .unwrap()
+            .copy_buffer(CopyBufferInfo::buffers(
+                fail_cnt_buffer.clone(),
+                staging_fail_cnt.clone(),
+            ))
+            .unwrap()
+            .copy_buffer(CopyBufferInfo::buffers(
+                centroids_num_buffer.clone(),
+                staging_centroids_num.clone(),
+            ))
+            .unwrap();
+    }
 
     let command_buffer = command_buffer_builder.build().unwrap();
 
@@ -568,13 +594,13 @@ fn main() {
     println!("{:?}", voxelization_points[0]);
     println!("------------------\n");
 
-    match save_pcd(
-        "/home/kenji/workspace/Rust/vulkano_sample/data/export-vulkano-voxelization.pcd",
-        voxelization_points_vec,
-    ) {
-        Ok(_) => println!("Saved voxelization points"),
-        Err(e) => eprintln!("Error saving voxelization points: {}", e),
-    };
+    // match save_pcd(
+    //     "/home/kenji/workspace/Rust/vulkano_sample/data/export-vulkano-voxelization.pcd",
+    //     voxelization_points_vec,
+    // ) {
+    //     Ok(_) => println!("Saved voxelization points"),
+    //     Err(e) => eprintln!("Error saving voxelization points: {}", e),
+    // };
 
     println!("Succeeded!");
 }
