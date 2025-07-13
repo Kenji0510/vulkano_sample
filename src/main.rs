@@ -91,10 +91,12 @@ fn display_info(device: &PhysicalDevice) {
     println!("-----------------------------");
 }
 
+const MAX_STORAGE_BUFFER_SIZE: u64 = 1024 * 1024 * 1024 * 4; // 4GB
+
 fn main() {
     // let pcd_file_path = "/home/kenji/workspace/Rust/vulkano_sample/data/combined_120.pcd";
     let pcd_file_path =
-        "/home/kenji/workspace/Rust/vulkano_sample/data/source/export-street-005.pcd";
+        "/home/kenji/workspace/Rust/vulkano_sample/data/source/export-street-001.pcd";
 
     // let pcd_data = match load_pcd(pcd_file_path) {
     let pcd_data_for_gbuffer = match load_pcd_xyz(pcd_file_path) {
@@ -119,8 +121,24 @@ fn main() {
 
     let voxel_size = 0.05;
     let scale = 1000.0;
-    let capasity = (pcd_data_for_gbuffer.len() * 3 * 4).next_power_of_two();
-    let buf_bytes = capasity * 4;
+    // let capasity = (pcd_data_for_gbuffer.len() * 3 * 4).next_power_of_two();
+    let capasity = (pcd_data_for_gbuffer.len() * 2).next_power_of_two();
+    let buf_bytes = capasity;
+
+    println!("=== Parameters ===");
+    println!("Voxel size: {}", &voxel_size);
+    println!("Capacity: {}", &capasity);
+    println!("Buffer bytes: {}", &buf_bytes);
+
+    if (capasity * std::mem::size_of::<u32>() >= MAX_STORAGE_BUFFER_SIZE as usize)
+        || (buf_bytes * std::mem::size_of::<u32>() >= MAX_STORAGE_BUFFER_SIZE as usize)
+    {
+        eprintln!(
+            "Error: Buffer size exceeds maximum allowed size of {} bytes.",
+            MAX_STORAGE_BUFFER_SIZE
+        );
+        return;
+    }
 
     let uniform = Uniform {
         min_coodination: [min_x, min_y, min_z],
@@ -130,12 +148,8 @@ fn main() {
         hash_mask: (capasity - 1) as u32,
     };
 
-    println!("=== Parameters ===");
-    println!("Voxel size: {}", &voxel_size);
     println!("Scale: {}", &uniform.scale);
     println!("Inv scale: {}", &uniform.inv_scale);
-    println!("Capacity: {}", &capasity);
-    println!("Buffer bytes: {}", &buf_bytes);
     println!("Hash mask: {}", &uniform.hash_mask);
     println!("-------------------\n");
 
@@ -594,13 +608,13 @@ fn main() {
     println!("{:?}", voxelization_points[0]);
     println!("------------------\n");
 
-    // match save_pcd(
-    //     "/home/kenji/workspace/Rust/vulkano_sample/data/export-vulkano-voxelization.pcd",
-    //     voxelization_points_vec,
-    // ) {
-    //     Ok(_) => println!("Saved voxelization points"),
-    //     Err(e) => eprintln!("Error saving voxelization points: {}", e),
-    // };
+    match save_pcd(
+        "/home/kenji/workspace/Rust/vulkano_sample/data/export-vulkano-voxelization.pcd",
+        voxelization_points_vec,
+    ) {
+        Ok(_) => println!("Saved voxelization points"),
+        Err(e) => eprintln!("Error saving voxelization points: {}", e),
+    };
 
     println!("Succeeded!");
 }
