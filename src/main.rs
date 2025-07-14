@@ -94,9 +94,9 @@ fn display_info(device: &PhysicalDevice) {
 const MAX_STORAGE_BUFFER_SIZE: u64 = 1024 * 1024 * 1024 * 4; // 4GB
 
 fn main() {
-    // let pcd_file_path = "/home/kenji/workspace/Rust/vulkano_sample/data/combined_120.pcd";
-    let pcd_file_path =
-        "/home/kenji/workspace/Rust/vulkano_sample/data/source/export-street-001.pcd";
+    let pcd_file_path = "/home/kenji/workspace/python3/research/pcd_operations/data/temp/pcd/cambridge_block_27_xyz.pcd";
+    // let pcd_file_path =
+    //     "/home/kenji/workspace/Rust/vulkano_sample/data/source/export-street-001.pcd";
 
     // let pcd_data = match load_pcd(pcd_file_path) {
     let pcd_data_for_gbuffer = match load_pcd_xyz(pcd_file_path) {
@@ -609,7 +609,7 @@ fn main() {
     println!("------------------\n");
 
     match save_pcd(
-        "/home/kenji/workspace/Rust/vulkano_sample/data/export-vulkano-voxelization.pcd",
+        "/home/kenji/workspace/Rust/vulkano_sample/data/export/export-vulkano-voxelization_xyz.pcd",
         voxelization_points_vec,
     ) {
         Ok(_) => println!("Saved voxelization points"),
