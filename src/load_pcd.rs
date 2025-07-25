@@ -27,7 +27,7 @@ pub struct Point {
     pub curvature: f32,
 }
 
-pub fn load_pcd(file_path: &str) -> Result<Vec<Point>, Box<dyn std::error::Error>> {
+pub fn load_pcd(file_path: &str) -> Result<Vec<PointForGBuffer>, Box<dyn std::error::Error>> {
     let reader = match Reader::open(file_path) {
         Ok(reader) => reader,
         Err(e) => {
@@ -36,13 +36,22 @@ pub fn load_pcd(file_path: &str) -> Result<Vec<Point>, Box<dyn std::error::Error
         }
     };
 
-    let points: Vec<Point> = match reader.collect() {
+    let data: Vec<Point> = match reader.collect() {
         Ok(points) => points,
         Err(e) => {
             eprintln!("Error reading PCD file: {}", e);
             return Err(e.into());
         }
     };
+
+    let points = data
+        .iter()
+        .map(|point| PointForGBuffer {
+            x: point.x,
+            y: point.y,
+            z: point.z,
+        })
+        .collect();
 
     Ok(points)
 }
